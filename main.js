@@ -1,6 +1,3 @@
-Find what you need faster … 
-Home is your new landing page and surfaces your most relevant files and folders
-
 const EOF = -1
 const COMMENT_CHAR = "#"
 const LF = '\n'
