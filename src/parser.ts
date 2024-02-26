@@ -6,7 +6,7 @@ const EOF: char = -1
 const LF: char = "\n"
 const CR: char = "\r"
 
-function formatError(message: string, location: FileLocation, input: string) {
+function formatError(message: string, location: FileLocation, input: string): string {
 
   function findLineLimit(input: string, index: number, dir: number) {
     while(index >= 0 && index <= input.length) {
@@ -37,7 +37,7 @@ function formatError(message: string, location: FileLocation, input: string) {
 }
 
 class TokenStream {
-  private source: string
+  private input: string
   private currentChar: null | char
 
   private line: number
@@ -45,7 +45,7 @@ class TokenStream {
   private cursor: number
 
   constructor(source: string) {
-    this.source = source
+    this.input = source
     this.currentChar = null 
 
     this.line = 1
@@ -55,6 +55,39 @@ class TokenStream {
 
   get location(): FileLocation {
     return new FileLocation(this.line, this.col, this.cursor)
+  }
+
+  error(message: string, loc: FileLocation) {
+    throw formatError(message, loc, this.input)
+  }
+
+  advance(): void {
+    let nC = this.cursor + 1
+    let ch = this.getChar(nC)
+
+    if (ch == EOF) {
+      this.cursor = this.input.length
+      this.currentChar = EOF
+
+      return
+    }
+
+    if (ch == CR || ch == LF) {
+      this.line++
+      this.col = 0
+    } else {
+      this.col++
+    }
+
+    this.currentChar = ch
+    this.cursor = nC
+  }
+
+  getChar(index: number): char {
+    if (index >= this.input.length) {
+      return EOF;
+    }
+    return this.input[index];
   }
 }
 
