@@ -705,7 +705,7 @@ function createScopeProxy() {
     set(obj, key, value) {
       let slot = obj.__getSlot(key)
 
-      if (slot == null) {
+      if (slot != null) {
         slot.value = value
         return value
       }
