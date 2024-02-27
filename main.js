@@ -17,6 +17,11 @@ const TT_ADD      = 9 // +
 const TT_SUB      = 11 // -
 const TT_ABSW     = 12 // |
 const TT_COMMA    = 13 // ,
+const TT_FLOORDIV = 14 // //
+const TT_GT       = 15 // >
+const TT_LT       = 16 // <
+const TT_GTE      = 17 // >=
+const TT_LTE      = 18 // <=
 
 // IR node types
 const IR_ERR      = TT_ERR
@@ -32,6 +37,7 @@ const BINARY_SUB  = 1
 const BINARY_DIV  = 2
 const BINARY_MUL  = 3
 const BINARY_POW  = 4
+const BINARY_FDIV = 5
 
 // Unary operations
 const UNARY_POS   = 0
@@ -40,72 +46,162 @@ const UNARY_ABS   = 2
 
 const SCOPE_PROXY = createScopeProxy()
 
-const { dir } = require("console")
-const fs = require("fs");
+const fs = require("fs")
 
 main()
 
-function ttToString(tt) {
-  switch (tt) {
-    case TT_EOF: return "TT_EOF"
-    case TT_ERR: return "TT_ERR"
-    case TT_ID: return "TT_ID"
-    case TT_NUM: return "TT_NUM"
-    case TT_LPAREN: return "TT_LPAREN"
-    case TT_RPAREN: return "TT_RPAREN"
-    case TT_MUL: return "TT_MUL"
-    case TT_POW: return "TT_POW"
-    case TT_DIV: return "TT_DIV"
-    case TT_ADD: return "TT_ADD"
-    case TT_SUB: return "TT_SUB"
-    case TT_ABSW: return "TT_ABSW"
-    default: return "UNKNOWN"
-  }
-}
-
 function main() {
-  let args = process.argv;
+  let args = process.argv
 
   if (args.length  < 3) {
-    console.error("File name not given!");
+    console.error("File name not given!")
     return
   }
 
   fs.readFile(args[2], null, (err, data) => {
     if (err) {
       console.error(`Error reading file: ${err}`)
-      return;
+      return
     }
 
-    evalString(data.toString());
-  });
+    evalString(data.toString())
+  })
 }
 
 function evalString(str) {
   let stream = new TokenStream(str)
+  let parser = new Parser(stream)
 
-  const maxLoc = 7
-  const maxVal = 30
-  const maxType = 10
+  let expr = parser.parse()
+  let scope = createRootScope()
 
-  while (true) {
-    let token = stream.next()
+  let result = executeNodes(expr, scope)
 
-    if (token.type == TT_EOF) {
-      break
+  console.log(`Exec result: ${JSON.stringify(result, null, 2)}`)
+}
+
+// ----------------------------------------------------------------------
+// ---------------------------- TYPING ----------------------------------
+// ----------------------------------------------------------------------
+
+function unknwonBi(operator) {
+  throw `Unknown Binary operator: ${operator}`
+}
+
+function unknwonUnary(operator) {
+  throw `Unknown Unary operator: ${operator}`
+}
+
+function unsupportedBiOperator(operator) {
+  let opName = ""
+  switch (operator) {
+    case BINARY_ADD: opName = "+"
+    case BINARY_SUB: opName = "-"
+    case BINARY_MUL: opName = "*"
+    case BINARY_DIV: opName = "/"
+    case BINARY_FDIV: opName = "//"
+
+    default:
+      unknwonBi(operator)
+  }
+
+  throw `Unsupported binary operator: ${opName}`
+}
+
+function unsupportedUnaryOperator(operator) {
+  let opName = ""
+
+  switch(operator) {
+    case UNARY_POS: opName = "+"
+    case UNARY_NEG: opName = "-"
+    case UNARY_ABS: opName = "|"
+
+    default:
+      unknwonBi(operator)
+  }
+
+  throw `Unsupported unary operator: ${opName}`
+}
+
+const TYPES = [
+  {
+    name: 'number',
+
+    test(value) {
+      return typeof value == 'number'
+    },
+
+    applyBiOp(lhs, rhs, operator) {
+      switch (operator) {
+        case BINARY_ADD:  return lhs + rhs
+        case BINARY_SUB:  return lhs - rhs
+        case BINARY_MUL:  return lhs * rhs
+        case BINARY_DIV:  return lhs / rhs
+        case BINARY_POW:  return lhs ** rhs
+        case BINARY_FDIV: return Math.floor(lhs / rhs)
+
+        default:
+          unknwonBi(operator)
+      }
+    },
+
+    applyUnaryOp(value, operator) {
+      switch (operator) {
+        case UNARY_ABS: return Math.abs(value)
+        case UNARY_NEG: return -value
+        case UNARY_POS: return +value
+
+        default:
+          unknwonUnary(operator)
+      }
+    }
+  }
+]
+
+function valueType(value) {
+  for (let index = 0; index < TYPES.length; index++) {
+    const type = TYPES[index]
+    
+    if (type.test(value)) {
+      return type
+    }
+  }
+
+  throw `Unsupported script type: ${typeof value}, value: ${value}`
+}
+
+
+// ----------------------------------------------------------------------
+// -------------------------- EXECUTION ---------------------------------
+// ----------------------------------------------------------------------
+
+
+function createScope(parent = null) {
+  let scopeVal = new Scope(parent)
+  return new Proxy(scopeVal, SCOPE_PROXY)
+}
+
+function createRootScope() {
+  let scope = createScope()
+
+  scope["pi"] = Math.PI
+  scope["sin"] = Math.sin
+  scope["sqrt"] = Math.sqrt
+
+  scope["vec3"] = (x,y,z) => {
+    if (y == undefined && z == undefined) {
+      return {x: x, y: x, z: x}
     }
 
-    let ttName = ttToString(token.type)
-    let val = token.value == undefined ? "" : token.value
-    let loc = token.loc.toString()
-
-    console.log(
-      `| ${loc.padStart(maxLoc)} | ${val.padStart(maxVal)} | ${ttName.padStart(maxType)}`
-    )
+    return {x: x, y: y, z: z}
   }
+
+  return scope
 }
 
 function executeNodes(node, scope) {
+  let type
+
   switch(node.type) {
     case IR_NUM:
       return node.value
@@ -124,7 +220,7 @@ function executeNodes(node, scope) {
       let args = []
 
       for (let i = 0; i < node.args.length; i++) {
-        const element = node.args[i];
+        const element = node.args[i]
         args[i] = executeNodes(element, scope)
       }
 
@@ -134,7 +230,103 @@ function executeNodes(node, scope) {
       let lhs = executeNodes(node.lhs, scope)
       let rhs = executeNodes(node.rhs, scope)
 
-      
+      type = valueType(lhs)
+
+      return type.applyBiOp(lhs, rhs, node.operation)
+
+    case IR_UNARY:
+      let target = executeNodes(node.target, scope)
+      type = valueType(target)
+
+      return type.applyUnaryOp(target, node.operation)
+
+    default:
+      throw `Unknown IR node type: ${node.type}, node=${node}, typeof.node=${typeof node}`
+  }
+}
+
+class Slot {
+  constructor(value) {
+    this.value = value
+  }
+}
+
+class Scope {
+  constructor(parent = null) {
+    this.__parent = parent
+  }
+
+  __getSlot(key) {
+    let direct = this[key]
+
+    if (direct != null) {
+      return direct
+    }
+
+    let parent = this.__parent
+
+    if (parent == null) {
+      return undefined
+    }
+
+    return parent.__getValue(key)
+  }
+
+  __defineSlot(key, value) {
+    let slot = new Slot(value)
+    this[key] = slot
+  }
+}
+
+function createScopeProxy() {
+  return {
+    get(obj, key) {
+      let slot = obj.__getSlot(key)
+
+      if (slot == null) {
+        return null
+      }
+
+      return slot.value
+    },
+
+    set(obj, key, value) {
+      let slot = obj.__getSlot(key)
+
+      if (slot != null) {
+        slot.value = value
+        return value
+      }
+
+      obj.__defineSlot(key, value)
+    }
+  }
+}
+
+
+// ----------------------------------------------------------------------
+// --------------------------- PARSING ----------------------------------
+// ----------------------------------------------------------------------
+
+function ttToString(tt) {
+  switch (tt) {
+    case TT_EOF: return "TT_EOF"
+    case TT_ERR: return "TT_ERR"
+    case TT_ID: return "TT_ID"
+    case TT_NUM: return "TT_NUM"
+    case TT_LPAREN: return "TT_LPAREN"
+    case TT_RPAREN: return "TT_RPAREN"
+    case TT_MUL: return "TT_MUL"
+    case TT_POW: return "TT_POW"
+    case TT_DIV: return "TT_DIV"
+    case TT_ADD: return "TT_ADD"
+    case TT_SUB: return "TT_SUB"
+    case TT_ABSW: return "TT_ABSW"
+    case TT_GT: return "GT"
+    case TT_LT: return "LT"
+    case TT_GTE: return "GTE"
+    case TT_LTE: return "LTE"
+    default: return "UNKNOWN"
   }
 }
 
@@ -154,18 +346,18 @@ function formatError(message, location, input) {
   }
 
   if (location == null || input == null) {
-    return message;
+    return message
   }
   
   let lineStart = findLineLimit(input, location.cursor, -1)
   let lineEnd = findLineLimit(input, location.cursor, 1)
 
   let lineStr = input.substring(lineStart, lineEnd)
-  let col = location.col;
+  let col = location.col
 
-  let context = `^ On line ${location.line}, column ${col}`;
+  let context = `^ On line ${location.line}, column ${col}`
 
-  return `[ERROR] ${message}:\n${lineStr}\n${context.padStart(col - 1 + context.length)}\n`;
+  return `[ERROR] ${message}:\n${lineStr}\n${context.padStart(col - 1 + context.length)}\n`
 }
 
 
@@ -173,15 +365,11 @@ function paddedNum(num) {
   return num.toString().padStart(3)
 }
 
-// ----------------------------------------------------------------------
-// --------------------------- CLASSES ----------------------------------
-// ----------------------------------------------------------------------
-
 class FileLocation {
   constructor(cursor, line, col) {
-    this.cursor = cursor;
-    this.line = line;
-    this.col = col;
+    this.cursor = cursor
+    this.line = line
+    this.col = col
   }
 
   toString() {
@@ -198,9 +386,9 @@ class TokenStream {
     this.line = 0
     this.col = 0
 
-    this.currentChar = null;
+    this.currentChar = null
 
-    this.peekedToken = null;
+    this.peekedToken = null
   }
 
   error(message, loc) {
@@ -235,9 +423,9 @@ class TokenStream {
 
   getChar(index) {
     if (index >= this.input.length) {
-      return EOF;
+      return EOF
     }
-    return this.input[index];
+    return this.input[index]
   }
 
   next() {
@@ -256,9 +444,9 @@ class TokenStream {
     }
 
     let t = this.parseToken()
-    this.peekedToken = t;
+    this.peekedToken = t
 
-    return t;
+    return t
   }
 
   skipWhitespace() {
@@ -285,7 +473,7 @@ class TokenStream {
 
   skipUntilLineEnd() {
     while (true) {
-      let ch = this.currentChar;
+      let ch = this.currentChar
 
       if (ch == LF || ch == EOF || ch == CR) {
         return
@@ -296,7 +484,7 @@ class TokenStream {
   }
 
   isWhitespace(ch) {
-    return ch == ' ' || ch == '\n' || ch == '\r';
+    return ch == ' ' || ch == '\n' || ch == '\r'
   }
 
   parseToken() {
@@ -306,7 +494,7 @@ class TokenStream {
 
     this.skipWhitespace()
 
-    const loc = this.location;
+    const loc = this.location
 
     if (this.currentChar == EOF) {
       return { loc: loc, type: TT_EOF }
@@ -323,8 +511,17 @@ class TokenStream {
       case "|": return this.singleCharToken(TT_ABSW)
       case "+": return this.singleCharToken(TT_ADD)
       case "-": return this.singleCharToken(TT_SUB)
-      case "/": return this.singleCharToken(TT_DIV)
       case ",": return this.singleCharToken(TT_COMMA)
+
+      case "/": 
+        this.advance()
+
+        if (this.currentChar == '/') {
+          this.advance()
+          return {type: TT_FLOORDIV, loc: loc}
+        }
+
+        return {type: TT_DIV, loc: loc}
 
       case "*":
         this.advance()
@@ -369,7 +566,7 @@ class TokenStream {
     let result = ""
     
     while (true) {
-      let ch = this.currentChar;
+      let ch = this.currentChar
 
       if (!this.isIdPart(ch)) {
         break
@@ -412,7 +609,7 @@ class TokenStream {
     let result = ""
 
     let exponentSet = false
-    let expLast = false;
+    let expLast = false
     let decimalSet = false
 
     while (true) {
@@ -506,6 +703,7 @@ class Parser {
 
     if (tt.type != type) {
       this.stream.error(`Expected ${ttToString(type)}, found ${ttToString(tt.type)}`)
+      return undefined
     }
 
     return tt
@@ -517,46 +715,47 @@ class Parser {
 
   binaryExpr() {
     let lhs = this.unaryExpr()
-    let peeked = this.peek()
 
-    if (!this.isBinary(peeked.type)) {
-      return lhs
+    while (this.isBinary(this.peek().type)) {
+      let token = this.next()
+
+      let rhs = this.unaryExpr()
+      let binaryOp
+  
+      switch (token.type) {
+        case TT_ADD:
+          binaryOp = BINARY_ADD
+          break
+        case TT_MUL:
+          binaryOp = BINARY_MUL
+          break
+        case TT_POW:
+          binaryOp = BINARY_POW
+          break
+        case TT_DIV:
+          binaryOp = BINARY_DIV
+          break
+        case TT_SUB:
+          binaryOp = BINARY_SUB
+          break
+        case TT_FLOORDIV:
+          binaryOp = BINARY_FDIV
+          break
+        
+        default:
+          this.error("idk lmao", token.loc)
+      }
+  
+      lhs = {
+        type: IR_BINARY,
+        operation: binaryOp,
+        lhs: lhs,
+        rhs: rhs,
+        loc: lhs.loc
+      }
     }
 
-    this.next()
-
-    let rhs = this.unaryExpr()
-
-    let binaryOp;
-
-    switch (peeked.type) {
-      case TT_ADD:
-        binaryOp = BINARY_ADD
-        break
-      case TT_MUL:
-        binaryOp = BINARY_MUL
-        break
-      case TT_POW:
-        binaryOp = BINARY_POW
-        break
-      case TT_DIV:
-        binaryOp = BINARY_DIV
-        break
-      case TT_SUB:
-        binaryOp = BINARY_SUB
-        break
-      
-      default:
-        this.error("idk lmao", peeked.loc)
-    }
-
-    return {
-      type: IR_BINARY,
-      operation: binaryOp,
-      lhs: lhs,
-      rhs: rhs,
-      loc: lhs.loc
-    }
+    return lhs
   }
 
   isBinary(ttype) {
@@ -566,6 +765,7 @@ class Parser {
       case TT_POW:
       case TT_DIV:
       case TT_SUB:
+      case TT_FLOORDIV:
         return true
 
       default:
@@ -579,7 +779,7 @@ class Parser {
     }
 
     let unaryToken = this.next()
-    let unaryOp;
+    let unaryOp
 
     switch (unaryToken.type) {
       case TT_ADD:
@@ -593,7 +793,7 @@ class Parser {
         break
     }
 
-    let expr = this.callExpr()
+    let expr = this.binaryExpr()
 
     if (unaryToken.type == TT_ABSW) {
       this.expect(TT_ABSW)
@@ -618,11 +818,12 @@ class Parser {
       return expr
     }
 
+    this.next()
     let args = []
 
     while (!this.matches(TT_RPAREN)) {
-      let expr = this.expr()
-      args += expr
+      let expr = this.binaryExpr()
+      args.push(expr)
 
       if (this.matches(TT_COMMA)) {
         this.next()
@@ -630,9 +831,12 @@ class Parser {
       }
 
       if (!this.matches(TT_RPAREN)) {
-        error("Expected either , or )", this.peek().loc)
+        let p = this.peek()
+        this.error(`Expected either , or ) found ${ttToString(p.type)}`, p.loc)
       }
     }
+
+    this.expect(TT_RPAREN)
 
     return { 
       type: IR_CALL, 
@@ -643,74 +847,22 @@ class Parser {
   }
 
   primaryExpr() {
-    let type = this.peek().type;
+    let type = this.peek().type
 
     switch(type) {
       case TT_ID:
       case TT_NUM:
         return this.next()
 
+      case TT_LPAREN:
+        this.next()
+        let expr = this.binaryExpr()
+        this.expect(TT_RPAREN)
+        return expr
+
       default:
         return {type: IR_ERR, loc: type.loc, value: type.value}
     }
   }
 
-}
-
-class Slot {
-  constructor(value) {
-    this.value = value
-  }
-}
-
-class Scope {
-  constructor(parent = null) {
-    this.__parent = parent
-  }
-
-  __getSlot(key) {
-    let direct = this[key]
-
-    if (direct != null) {
-      return direct
-    }
-
-    let parent = this.__parent
-
-    if (parent == null) {
-      return undefined
-    }
-
-    return parent.__getValue(key)
-  }
-
-  __defineSlot(key, value) {
-    let slot = new Slot(value)
-    this[key] = slot
-  }
-}
-
-function createScopeProxy() {
-  return {
-    get(obj, key) {
-      let slot = obj.__getSlot(key)
-
-      if (slot == null) {
-        return null
-      }
-
-      return slot.value
-    },
-
-    set(obj, key, value) {
-      let slot = obj.__getSlot(key)
-
-      if (slot != null) {
-        slot.value = value
-        return value
-      }
-
-      obj.__defineSlot(key, value)
-    }
-  }
 }
