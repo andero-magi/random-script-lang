@@ -123,6 +123,8 @@ function unsupportedUnaryOperator(operator) {
   throw `Unsupported unary operator: ${opName}`
 }
 
+const TID_NUM = 0
+
 const TYPES = [
   {
     name: 'number',
@@ -159,15 +161,21 @@ const TYPES = [
 ]
 
 function valueType(value) {
-  for (let index = 0; index < TYPES.length; index++) {
-    const type = TYPES[index]
-    
-    if (type.test(value)) {
-      return type
-    }
-  }
+  switch (typeof value) {
+    case 'number':
+      return TYPES[TID_NUM]
 
-  throw `Unsupported script type: ${typeof value}, value: ${value}`
+    default:
+      for (let index = 0; index < TYPES.length; index++) {
+        const type = TYPES[index]
+        
+        if (type.test(value)) {
+          return type
+        }
+      }
+
+      throw `Unsupported script type: ${typeof value}, value: ${value}`
+  }
 }
 
 
