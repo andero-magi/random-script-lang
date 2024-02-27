@@ -22,6 +22,12 @@ const TT_GT       = 15 // >
 const TT_LT       = 16 // <
 const TT_GTE      = 17 // >=
 const TT_LTE      = 18 // <=
+const TT_VARDEC   = 19 // var
+const TT_ASSIGN   = 20 // =
+const TT_RETURN   = 21 // return
+const TT_FUNC     = 22 // func
+const TT_LCURL    = 23 // {
+const TT_RCURL    = 24 // }
 
 // IR node types
 const IR_ERR      = TT_ERR
@@ -30,6 +36,12 @@ const IR_NUM      = TT_NUM
 const IR_CALL     = 3
 const IR_UNARY    = 4
 const IR_BINARY   = 6
+const IR_DECVAR   = 7
+const IR_STATL    = 8 // statement list
+const IR_RETURN   = 9
+const IR_ROOT     = 10
+const IR_FUNC     = 11
+const IR_EXPRSTAT = 12
 
 // Binary operations
 const BINARY_ADD  = 0
@@ -44,17 +56,20 @@ const UNARY_POS   = 0
 const UNARY_NEG   = 1
 const UNARY_ABS   = 2
 
-const SCOPE_PROXY = createScopeProxy()
-
+// Module imports
 const fs = require("fs")
+const readline = require("readline").createInterface({
+  input: process.stdin,
+  output: process.stdout
+})
 
 main()
 
 function main() {
   let args = process.argv
 
-  if (args.length  < 3) {
-    console.error("File name not given!")
+  if (args.length < 3) {
+    evalLoop()
     return
   }
 
@@ -64,20 +79,122 @@ function main() {
       return
     }
 
-    evalString(data.toString())
+    if (args.length > 3) {
+      let stream = new TokenStream(data.toString())
+      let parser = new Parser(stream);
+
+      let ast = parser.parse()
+
+      let omitLocs = args.length > 4 && args[4] == "--omit-locs"
+
+      let replacer = (key, value) => astPrintReplace(key, value, omitLocs)
+
+      let astStr = JSON.stringify(ast, replacer, 2)
+      let outfileName = args[3]
+  
+      fs.unlinkSync(outfileName)
+
+      fs.writeFileSync(outfileName, astStr, err => {
+        if (err == null) {
+          return
+        }
+
+        console.error(err)
+      })
+    } else {
+      evalString(data.toString())
+    }
+    process.exit()
   })
 }
 
-function evalString(str) {
+function astPrintReplace(key, value, omitLocs) {
+  if (key == "loc" && omitLocs) {
+    return undefined
+  }
+
+  if (key == "type") {
+    switch (value) {
+      case IR_ERR: return "IR_ERR"
+      case IR_ID: return "IR_ID"
+      case IR_NUM: return "IR_NUM"
+      case IR_CALL: return "IR_CALL"
+      case IR_UNARY: return "IR_UNARY"
+      case IR_BINARY: return "IR_BINARY"
+      case IR_DECVAR: return "IR_DECVAR"
+      case IR_STATL: return "IR_STATL"
+      case IR_RETURN: return "IR_RETURN"
+      case IR_ROOT: return "IR_ROOT"
+      case IR_FUNC: return "IR_FUNC"
+      default: return value
+    }
+  }
+
+  if (value.operation != undefined) {
+    let irType = value.type
+    let opType = value.operation
+
+    if (irType == IR_UNARY) {
+      switch (opType) {
+        case UNARY_POS: opType = "POS"
+        case UNARY_NEG: opType = "NEG"
+        case UNARY_ABS: opType = "ABS"
+
+        default:
+          break
+      }
+    } else {
+      switch (opType) {
+        case BINARY_ADD: opType = "ADD"
+        case BINARY_SUB: opType = "SUB"
+        case BINARY_DIV: opType = "DIV"
+        case BINARY_MUL: opType = "MUL"
+        case BINARY_POW: opType = "POW"
+        case BINARY_FDIV: opType = "FDIV"
+
+        default:
+          break
+      }
+    }
+
+    value.operation = opType
+  }
+
+  return value
+}
+
+function evalLoop(scope = null) {
+  readline.question("", answer => {
+    if (answer == "leave") {
+      process.exit()
+      return
+    }
+
+    try {
+      scope = evalString(answer, scope)
+      evalLoop(scope)
+    } catch (err) {
+      process.stderr.write(`[ERROR] ${err.toString()}\n`)
+      evalLoop(scope)
+    }
+  })
+}
+
+function evalString(str, scope = null) {
   let stream = new TokenStream(str)
   let parser = new Parser(stream)
 
   let expr = parser.parse()
-  let scope = createRootScope()
+  
+  if (scope == null) {
+    scope = createRootScope()
+  }
 
   let result = executeNodes(expr, scope)
 
   console.log(`Exec result: ${JSON.stringify(result, null, 2)}`)
+
+  return scope
 }
 
 // ----------------------------------------------------------------------
@@ -186,42 +303,68 @@ function valueType(value) {
 
 function createScope(parent = null) {
   let scopeVal = new Scope(parent)
-  return new Proxy(scopeVal, SCOPE_PROXY)
+  return scopeVal
 }
 
 function createRootScope() {
   let scope = createScope()
 
-  scope["pi"] = Math.PI
-  scope["sin"] = Math.sin
-  scope["sqrt"] = Math.sqrt
+  scope.defineSlot("pi", Math.PI)
 
-  scope["vec3"] = (x,y,z) => {
-    if (y == undefined && z == undefined) {
-      return {x: x, y: x, z: x}
-    }
+  scope.defineSlot("sin", Math.sin)
+  scope.defineSlot("tan", Math.tan)
+  scope.defineSlot("cos", Math.cos)
 
-    return {x: x, y: y, z: z}
-  }
+  scope.defineSlot("min", Math.min)
+  scope.defineSlot("max", Math.max)
+  scope.defineSlot("log", Math.log)
+
+  scope.defineSlot("atan", Math.atan)
+  scope.defineSlot("acos", Math.acos)
+  scope.defineSlot("asin", Math.asin)
+
+  scope.defineSlot("tanh", Math.atanh)
+  scope.defineSlot("cosh", Math.acosh)
+  scope.defineSlot("sinh", Math.asinh)
+  
+  scope.defineSlot("atanh", Math.atanh)
+  scope.defineSlot("acosh", Math.acosh)
+  scope.defineSlot("asinh", Math.asinh)
+
+  scope.defineSlot("atan2", Math.atan2)
+  scope.defineSlot("floor", Math.floor)
+  scope.defineSlot("ceil", Math.ceil)
+  scope.defineSlot("sqrt", Math.sqrt)
 
   return scope
 }
 
+function ensureCanDefine(key, scope) {
+  if (scope.canDefine(key)) {
+    return
+  }
+
+  throw `Variable '${key}' has already been defined in this scope`
+}
+
 function executeNodes(node, scope) {
   let type
+  let value
+  let name
 
   switch(node.type) {
     case IR_NUM:
       return node.value
 
     case IR_ID:
-      let value = scope[node.value]
+      let slot = scope.getSlot(node.value)
+      
 
-      if (value == null) {
+      if (slot == null) {
         throw `Unknown value: '${node.value}'`
       }
 
-      return value
+      return slot.value
 
     case IR_CALL:
       let funcObject = executeNodes(node.target, scope)
@@ -229,7 +372,7 @@ function executeNodes(node, scope) {
 
       for (let i = 0; i < node.args.length; i++) {
         const element = node.args[i]
-        args[i] = executeNodes(element, scope)
+        args.push(executeNodes(element, scope))
       }
 
       return funcObject.apply(null, args)
@@ -248,6 +391,74 @@ function executeNodes(node, scope) {
 
       return type.applyUnaryOp(target, node.operation)
 
+    case IR_DECVAR:
+      name = node.name.value
+      ensureCanDefine(name, scope)
+
+      value = node.value == undefined ? undefined : executeNodes(node.value, scope)
+      scope.defineSlot(name, value)
+
+      return undefined
+
+    case IR_ROOT:
+    case IR_STATL:
+      let statList = node.statements
+
+      for (let index = 0; index < statList.length; index++) {
+        let stat = statList[index]
+
+        if (stat.type == IR_RETURN) {
+          value = stat.value == undefined ? undefined : executeNodes(stat.value, scope)
+          return value
+        }
+
+        let shouldReturn = (index == (statList.length - 1) && node.type == IR_ROOT)
+        if (shouldReturn && stat.type == IR_EXPRSTAT) {
+          stat = stat.expr
+        }
+
+        value = executeNodes(stat, scope)
+
+        if (value != undefined && shouldReturn) {
+          return value
+        }
+      }
+
+      return undefined
+
+    case IR_FUNC:
+      name = node.name.value
+      
+      let params = node.params
+      let body = node.body
+
+      ensureCanDefine(name, scope)
+
+      let func = (...args) => {
+        if (args.length < params.length) {
+          throw `Missing arguments!, required: ${params.length}, found: ${args.length}`
+        }
+
+        let childScope = createScope(scope)
+
+        for (let index = 0; index < params.length; index++) {
+          const element = params[index]
+          const argValue = args[index]
+
+          childScope.defineSlot(element.value, argValue)
+        }
+
+        return executeNodes(body, childScope)
+      }
+
+      scope.defineSlot(name, func)
+
+      return undefined
+
+    case IR_EXPRSTAT:
+      executeNodes(node.expr, scope)
+      return undefined
+
     default:
       throw `Unknown IR node type: ${node.type}, node=${node}, typeof.node=${typeof node}`
   }
@@ -264,7 +475,15 @@ class Scope {
     this.__parent = parent
   }
 
-  __getSlot(key) {
+  canDefine(key) {
+    let direct = this[key]
+    if (direct == null) {
+      return true
+    }
+    return false
+  }
+
+  getSlot(key) {
     let direct = this[key]
 
     if (direct != null) {
@@ -277,40 +496,14 @@ class Scope {
       return undefined
     }
 
-    return parent.__getValue(key)
+    return parent.getSlot(key)
   }
 
-  __defineSlot(key, value) {
+  defineSlot(key, value) {
     let slot = new Slot(value)
     this[key] = slot
   }
 }
-
-function createScopeProxy() {
-  return {
-    get(obj, key) {
-      let slot = obj.__getSlot(key)
-
-      if (slot == null) {
-        return null
-      }
-
-      return slot.value
-    },
-
-    set(obj, key, value) {
-      let slot = obj.__getSlot(key)
-
-      if (slot != null) {
-        slot.value = value
-        return value
-      }
-
-      obj.__defineSlot(key, value)
-    }
-  }
-}
-
 
 // ----------------------------------------------------------------------
 // --------------------------- PARSING ----------------------------------
@@ -318,28 +511,33 @@ function createScopeProxy() {
 
 function ttToString(tt) {
   switch (tt) {
-    case TT_EOF: return "TT_EOF"
-    case TT_ERR: return "TT_ERR"
-    case TT_ID: return "TT_ID"
-    case TT_NUM: return "TT_NUM"
-    case TT_LPAREN: return "TT_LPAREN"
-    case TT_RPAREN: return "TT_RPAREN"
-    case TT_MUL: return "TT_MUL"
-    case TT_POW: return "TT_POW"
-    case TT_DIV: return "TT_DIV"
-    case TT_ADD: return "TT_ADD"
-    case TT_SUB: return "TT_SUB"
-    case TT_ABSW: return "TT_ABSW"
+    case TT_EOF: return "EOF"
+    case TT_ERR: return "ERR"
+    case TT_ID: return "ID"
+    case TT_NUM: return "NUM"
+    case TT_LPAREN: return "LPAREN"
+    case TT_RPAREN: return "RPAREN"
+    case TT_MUL: return "MUL"
+    case TT_POW: return "POW"
+    case TT_DIV: return "DIV"
+    case TT_ADD: return "ADD"
+    case TT_SUB: return "SUB"
+    case TT_ABSW: return "ABSW"
     case TT_GT: return "GT"
     case TT_LT: return "LT"
     case TT_GTE: return "GTE"
     case TT_LTE: return "LTE"
-    default: return "UNKNOWN"
+    case TT_VARDEC: return "VARDEC"
+    case TT_ASSIGN: return "ASSIGN"
+    case TT_RETURN: return "RETURN"
+    case TT_FUNC: return "FUNC"
+    case TT_LCURL: return "LCURL"
+    case TT_RCURL: return "RCURL"
+    default: return "UNKNOWN(" + tt + ")"
   }
 }
 
 function formatError(message, location, input) {
-
   function findLineLimit(input, index, dir) {
     while(index >= 0 && index <= input.length) {
       let ch = input[index]
@@ -471,7 +669,7 @@ class TokenStream {
       }
 
       if (ch == COMMENT_CHAR) {
-        skipUntilLineEnd()
+        this.skipUntilLineEnd()
         continue
       }
 
@@ -516,10 +714,13 @@ class TokenStream {
     switch (this.currentChar) {
       case "(": return this.singleCharToken(TT_LPAREN)
       case ")": return this.singleCharToken(TT_RPAREN)
+      case "{": return this.singleCharToken(TT_LCURL)
+      case "}": return this.singleCharToken(TT_RCURL)
       case "|": return this.singleCharToken(TT_ABSW)
       case "+": return this.singleCharToken(TT_ADD)
       case "-": return this.singleCharToken(TT_SUB)
       case ",": return this.singleCharToken(TT_COMMA)
+      case "=": return this.singleCharToken(TT_ASSIGN)
 
       case "/": 
         this.advance()
@@ -544,7 +745,20 @@ class TokenStream {
       default:
         if (this.isIdStart(this.currentChar)) {
           let id = this.parseId()
-          return {type: TT_ID, value: id, loc: loc}
+
+          switch (id) {
+            case "var":
+              return {type: TT_VARDEC, loc: loc}
+
+            case "return":
+              return {type: TT_RETURN, loc: loc}
+
+            case "func":
+              return {type: TT_FUNC, loc: loc}
+
+            default:
+              return {type: TT_ID, value: id, loc: loc}
+          }
         }
 
         let ch = this.currentChar
@@ -710,7 +924,7 @@ class Parser {
     let tt = this.next()
 
     if (tt.type != type) {
-      this.stream.error(`Expected ${ttToString(type)}, found ${ttToString(tt.type)}`)
+      this.stream.error(`Expected ${ttToString(type)}, found ${ttToString(tt.type)}`, tt.loc)
       return undefined
     }
 
@@ -718,6 +932,126 @@ class Parser {
   }
 
   parse() {
+    let statements = []
+    let firstLoc = this.peek().loc
+
+    while (this.peek().type != TT_EOF) {
+      let statement = this.statement()
+      statements.push(statement)
+    }
+
+    return {type: IR_ROOT, statements: statements, loc: firstLoc}
+  }
+
+  statement() {
+    let peek = this.peek()
+
+    switch (peek.type) {
+      case TT_VARDEC:
+        return this.varDec()
+
+      case TT_RETURN:
+        return this.returnStat()
+
+      case TT_RETURN:
+        return this.funcDec()
+
+      case TT_LCURL:
+        return this.blockStat()
+
+      case TT_FUNC:
+        return this.funcDec()
+
+      default:
+        let expr = this.expr()
+        return {type: IR_EXPRSTAT, expr: expr, loc: expr.loc}
+    }
+  }
+
+  funcDec() {
+    let start = this.expect(TT_FUNC)
+    let name = this.id()
+
+    let params = []
+
+    this.expect(TT_LPAREN)
+
+    while (!this.matches(TT_RPAREN)) {
+      let param = this.id()
+      params.push(param)
+
+      if (this.matches(TT_COMMA)) {
+        this.next()
+        continue
+      }
+
+      if (!this.matches(TT_RPAREN)) {
+        let p = this.peek()
+        this.stream.error(`Expected either , or ), found ${ttToString(p.type)}`, p.loc)
+      }
+    }
+
+    this.expect(TT_RPAREN)
+
+    let block = this.blockStat()
+
+    return {
+      type: IR_FUNC,
+      name: name,
+      params: params,
+      body: block,
+      loc: start.loc
+    }
+  }
+
+  varDec() {
+    let start = this.expect(TT_VARDEC)
+    let name = this.id()
+
+    if (!this.matches(TT_ASSIGN)) {
+      return {type: IR_DECVAR, name: name, loc: start.loc, value: undefined}
+    }
+
+    this.next()
+    let value = this.expr()
+
+    return {type: IR_DECVAR, name: name, loc: start.loc, value: value}
+  }
+
+  returnStat() {
+    let start = this.expect(TT_RETURN)
+
+    let startLine = start.loc.line
+    let peek = this.peek()
+
+    if (peek.type == TT_EOF || peek.loc.line != startLine) {
+      return {type: IR_RETURN, loc: start.loc, value: undefined}
+    }
+
+    let expr = this.expr()
+    return {type: IR_RETURN, loc: start.loc, value: expr}
+  }
+
+  blockStat() {
+    let start = this.expect(TT_LCURL)
+    let statList = []
+
+    while (!this.matches(TT_RCURL)) {
+      let stat = this.statement()
+
+      if (stat.type == IR_ERR) {
+        break
+      }
+
+      statList.push(stat)
+    }
+
+    this.expect(TT_RCURL)
+
+    return {type: IR_STATL, statements: statList, loc: start.loc}
+  }
+
+  expr() {
     return this.binaryExpr()
   }
 
@@ -801,9 +1135,9 @@ class Parser {
         break
     }
 
-    let expr = this.binaryExpr()
+    let expr = this.expr()
 
-    if (unaryToken.type == TT_ABSW) {
+    if (unaryOp == UNARY_ABS) {
       this.expect(TT_ABSW)
     }
 
@@ -830,7 +1164,7 @@ class Parser {
     let args = []
 
     while (!this.matches(TT_RPAREN)) {
-      let expr = this.binaryExpr()
+      let expr = this.expr()
       args.push(expr)
 
       if (this.matches(TT_COMMA)) {
@@ -859,12 +1193,14 @@ class Parser {
 
     switch(type) {
       case TT_ID:
+        return this.id()
+
       case TT_NUM:
         return this.next()
 
       case TT_LPAREN:
         this.next()
-        let expr = this.binaryExpr()
+        let expr = this.expr()
         this.expect(TT_RPAREN)
         return expr
 
@@ -873,4 +1209,8 @@ class Parser {
     }
   }
 
+  id() {
+    let tt = this.expect(TT_ID)
+    return {type: TT_ID, value: tt.value, loc: tt.loc}
+  }
 }
